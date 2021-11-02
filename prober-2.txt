@@ -1,0 +1,134 @@
+#!/usr/bin/python
+
+from easysnmp import Session
+import easysnmp
+import sys
+import time
+
+# client send input arguments in command line
+# "python file" "snmp_device_ip:port:community" "samp_f" "no_of_samples" "OIDs"
+# value chosen for above line
+# snmp_device_ip : 18.219.51.6
+# port: 1611 (or) 1612
+# sampling frequency 0.1Hz to 10 Hz.
+# number of samples is greater than or eaqual to two.
+
+
+# split the value in array index[1] of sys.argv and assign it to agent_ip, port, comm
+
+#agent_ip, port, comm = (sys.argv[1].split(":"))
+
+input_data = str(sys.argv[1]).split(":")
+agent_ip = input_data[0]
+port = input_data[1]
+comm = input_data[2]
+
+#sampling frequency value taken from index[2] of arguments we passed
+sampF = float(sys.argv[2])
+
+#sampling time is calculated using frequency
+sampT = 1/sampF
+
+#Number of samples taken from index[3] of arguments we passed
+sampN = sys.argv[3]
+
+#Initialize count as zero
+count=0
+
+#Initialize sysupTime with value
+sysupT = ['1.3.6.1.2.1.1.3.0']
+
+#Taken OID list value starting from index[4] till length of arguments
+list_of_oids = sys.argv[4:len(sys.argv)]
+
+# Starting OID is sysupTime, so append sysupT with list_of_oids
+updated_oids = sysupT + list_of_oids
+
+# create empty array to store previous value
+prev_oids=[]
+
+#store the output value
+output=[]
+
+current_time=0
+timeout=0
+restart=0
+
+# while loop will execute till count not equal to no_of_samples.
+
+while (count!= int(sampN)):
+  request_time=time.time()
+  try:
+      session = Session(hostname=agent_ip, remote_port = port, community=comm, version=2)
+      new_oids = session.get(updated_oids) # assign updated oids list to new variable new_oids
+     
+     
+  except easysnmp.exceptions.EasySNMPTimeoutError:
+      print'Timeout',count
+      count = count+1
+      timeout = timeout+1
+      continue
+
+  if len(new_oids)==len(prev_oids):
+   pp1=float(new_oids[0].value)/100
+   pp2=float(prev_oids[0].value)/100
+   if (pp2-pp1)>0:
+     print'Restarting..'
+     restart += 1
+   else:
+      
+     if sampF > 1: # if sampling frequency greater than 1
+       diffT = pp1-pp2 # subtract value from new_oids to prev_oids
+
+     else: # if sampling frequency less than 1
+       diffT_LF = (request_time-current_time) # subtract present request time with previous one.
+ 
+       if diffT_LF!=0:
+         diffT = int(diffT_LF)
+       else:
+         diffT = int(sampT)
+
+   for kk in range(1,len(updated_oids)):
+      if new_oids[kk].value!="NOSUCHINSTANCE"and prev_oids[kk].value!="NOSUCHINSTANCE":
+            
+        present=int(new_oids[kk].value)
+        past=int(prev_oids[kk].value)
+         
+        if present>=past:
+          result=(present-past)/diffT
+          output.append(result)
+
+        if present<past and new_oids[kk].snmp_type=="COUNTER64":
+          result=((present+2**64)-past)/diffT
+          output.append(result)
+
+        if present<past and new_oids[kk].snmp_type=="COUNTER32":
+          result=((present+2**32)-past)/diffT
+          output.append(result)
+      else:
+        print int(request_time),"|"
+        count=count+1
+        continue
+        #sys.exit
+
+  # To print the output in single line for each sample
+   if len(output)!=0:
+      value = [str(x) for x in output]
+      print int(request_time) ,'|', ('|'. join(value))
+      count=count+1
+
+  prev_oids = new_oids[:]
+  current_time=request_time
+  del output[:] # clear the output value
+
+  response_time=time.time()
+
+  if sampT-response_time+request_time>0:
+    time.sleep(sampT-response_time+request_time)
+  else:
+    time.sleep(0.0)
+
+if timeout>0:
+  print'Total timeouts:', timeout
+if restart>0:
+  print'Total restarting:', restart
